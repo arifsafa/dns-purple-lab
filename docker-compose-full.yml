@@ -1,0 +1,250 @@
+version: '3.9'
+
+# ═══════════════════════════════════════════════════════════════
+#  dns-purple-lab  —  Full Stack
+#  Zeek · Elasticsearch · Kibana · Python Detection Suite · CTI
+# ═══════════════════════════════════════════════════════════════
+#
+#  Quick start:
+#    docker compose up -d
+#    open http://localhost:5601  (Kibana)
+#
+#  Services:
+#    attacker      172.20.0.10   Simulation tools
+#    dns_resolver  172.20.0.20   Unbound (verbose logging)
+#    zeek          172.20.0.25   Passive DNS/QUIC capture
+#    elasticsearch 172.20.0.30   Log storage + ML
+#    kibana        172.20.0.31   Dashboards (port 5601)
+#    monitoring    172.20.0.40   Python detection suite
+#    cti           172.20.0.50   CTI feed daemon
+#
+#  All external traffic BLOCKED by default (lab isolation).
+
+networks:
+  lab_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+  # Separate network for ELK (can have external access if needed)
+  elk_net:
+    driver: bridge
+
+# ── Volumes ────────────────────────────────────────────────────
+
+volumes:
+  esdata:        { driver: local }
+  zeek_logs:     { driver: local }
+  unbound_logs:  { driver: local }
+  reports:       { driver: local }
+  intel:         { driver: local }
+
+
+services:
+
+# ──────────────────────────────────────────────────────────────
+# Attacker node
+# ──────────────────────────────────────────────────────────────
+  attacker:
+    image: python:3.12-slim
+    container_name: dns_attacker
+    hostname: attacker
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.10
+    volumes:
+      - ./tools:/tools:ro
+      - ./data:/data
+    working_dir: /tools
+    command: >
+      sh -c "pip install dnspython scikit-learn numpy -q &&
+             echo '[ATTACKER] Ready' && sleep infinity"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    environment:
+      - DNS_RESOLVER=172.20.0.20
+      - LAB_DOMAIN=lab.internal
+
+# ──────────────────────────────────────────────────────────────
+# DNS Resolver — Unbound with full query logging
+# ──────────────────────────────────────────────────────────────
+  dns_resolver:
+    image: mvance/unbound:latest
+    container_name: dns_resolver
+    hostname: resolver
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.20
+    volumes:
+      - ./config/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
+      - unbound_logs:/var/log/unbound
+    ports:
+      - "127.0.0.1:5353:53/udp"
+      - "127.0.0.1:5353:53/tcp"
+    healthcheck:
+      test: ["CMD", "unbound-control", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ──────────────────────────────────────────────────────────────
+# Zeek — passive capture, outputs to shared volume
+# ──────────────────────────────────────────────────────────────
+  zeek:
+    image: zeek/zeek:latest
+    container_name: dns_zeek
+    hostname: zeek
+    network_mode: "service:dns_resolver"
+    volumes:
+      - ./config/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - zeek_logs:/opt/zeek/logs
+      - intel:/opt/zeek/intel
+    command: >
+      zeek -i eth0
+      -e "redef Log::default_logdir=\"/opt/zeek/logs\"; redef Intel::read_files += { \"/opt/zeek/intel/zeek_intel_domains.dat\", \"/opt/zeek/intel/zeek_intel_ips.dat\" };"
+      local
+    cap_add: [NET_ADMIN, NET_RAW]
+    depends_on:
+      dns_resolver:
+        condition: service_healthy
+
+# ──────────────────────────────────────────────────────────────
+# Elasticsearch — log storage + ML anomaly detection
+# ──────────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: dns_elasticsearch
+    hostname: elasticsearch
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.30
+      elk_net:
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false          # Lab only — disable auth
+      - xpack.ml.enabled=true
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - cluster.name=dns-purple-lab
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+
+# ──────────────────────────────────────────────────────────────
+# Kibana — dashboards + alerting
+# ──────────────────────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: dns_kibana
+    hostname: kibana
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.31
+      elk_net:
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - KIBANA_SYSTEM_PASSWORD=lab_kibana
+      - SERVER_NAME=dns-purple-lab
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
+# ──────────────────────────────────────────────────────────────
+# Filebeat — ships Zeek logs to Elasticsearch
+# ──────────────────────────────────────────────────────────────
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.0
+    container_name: dns_filebeat
+    hostname: filebeat
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.35
+      elk_net:
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - zeek_logs:/zeek_logs:ro
+    command: filebeat -e --strict.perms=false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    user: root
+
+# ──────────────────────────────────────────────────────────────
+# Monitoring — Python detection suite
+# ──────────────────────────────────────────────────────────────
+  monitoring:
+    image: python:3.12-slim
+    container_name: dns_monitoring
+    hostname: monitoring
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.40
+      elk_net:
+    volumes:
+      - ./tools:/tools:ro
+      - zeek_logs:/zeek_logs:ro
+      - reports:/reports
+    working_dir: /tools
+    command: >
+      sh -c "pip install scikit-learn numpy dnspython requests -q &&
+             echo '[MONITORING] Ready' &&
+             while true; do
+               python dns_anomaly_detector.py --zeek /zeek_logs/dns.log
+                 --json /reports/dns_anomalies.json 2>/dev/null || true;
+               python encrypted_dns_hunter.py --conn /zeek_logs/conn.log
+                 --json /reports/c2_alerts.json
+                 --elasticsearch http://172.20.0.30:9200 2>/dev/null || true;
+               sleep 300;
+             done"
+    environment:
+      - ES_URL=http://172.20.0.30:9200
+      - ZEEK_LOG_DIR=/zeek_logs
+      - REPORT_DIR=/reports
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+# ──────────────────────────────────────────────────────────────
+# CTI daemon — pulls threat intel, feeds Zeek
+# ──────────────────────────────────────────────────────────────
+  cti:
+    image: python:3.12-slim
+    container_name: dns_cti
+    hostname: cti
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.50
+      elk_net:
+    volumes:
+      - ./tools:/tools:ro
+      - intel:/intel
+    working_dir: /tools
+    command: >
+      sh -c "pip install requests -q &&
+             echo '[CTI] Starting daemon...' &&
+             python cti_module.py --daemon
+               --output /intel
+               --interval 3600
+               --elasticsearch http://172.20.0.30:9200"
+    environment:
+      - OTX_API_KEY=${OTX_API_KEY:-}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
