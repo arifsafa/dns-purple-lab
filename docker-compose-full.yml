@@ -95,7 +95,6 @@ services:
   zeek:
     image: zeek/zeek:latest
     container_name: dns_zeek
-    hostname: zeek
     network_mode: "service:dns_resolver"
     volumes:
       - ./config/zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
@@ -129,6 +128,7 @@ services:
       - xpack.ml.enabled=true
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
       - cluster.name=dns-purple-lab
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
       - "127.0.0.1:9200:9200"
     healthcheck:
