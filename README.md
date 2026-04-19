@@ -21,7 +21,7 @@ These tools are for defensive research and authorized penetration testing only.
 
 ---
 
-## 🗂️ Repository Structure
+##  Repository Structure
 
 ```
 dns-purple-lab/
@@ -49,7 +49,7 @@ dns-purple-lab/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Option A: Tools Only (no Docker)
 
@@ -88,7 +88,10 @@ docker compose exec attacker \
     --resolver 172.20.0.20 \
     --mode slow-drip --delay 30 --jitter --live
 ```
+KRİTİK: Linux üzerinde Elasticsearch'ün çökmemesi için labı başlatmadan önce şu komutu çalıştırın:
+CRITICAL: To prevent Elasticsearch from crashing on Linux, run this command before starting the lab:
 
+sudo sysctl -w vm.max_map_count=262144
 ---
 
 ## 🛠️ Tool Reference
@@ -340,7 +343,7 @@ Track improvements over successive runs. Target: MTTD < 4h, MTTR < 30min.
 
 ---
 
-## 📝 CV-Ready Descriptions
+## Descriptions
 
 If you build on this lab, here's how to describe it:
 
