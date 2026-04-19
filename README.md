@@ -26,9 +26,9 @@ These tools are for defensive research and authorized penetration testing only.
 ```
 dns-purple-lab/
 ├── tools/
-│   ├── dns_anomaly_detector.py     Blue Team: DNS exfil + DGA + ML detection
-│   ├── dns_exfil_sim.py            Purple Team: Slow-drip / burst simulation
-│   ├── encrypted_dns_hunter.py     Blue Team: DoH/DoQ C2 detection
+│   ├── dns_anomaly_detector_v2.py     Blue Team: DNS exfil + DGA + ML detection
+│   ├── dns_exfil_sim_v2.py            Purple Team: Slow-drip / burst simulation
+│   ├── encrypted_dns_hunter_v2.py     Blue Team: DoH/DoQ C2 detection
 │   └── docker-compose.yml          Isolated lab environment
 │
 ├── config/
@@ -58,13 +58,13 @@ dns-purple-lab/
 pip install dnspython scikit-learn numpy scapy
 
 # Run DNS anomaly detector (demo mode)
-python tools/dns_anomaly_detector.py --demo
+python tools/dns_anomaly_detector_v2.py --demo
 
 # Run encrypted DNS hunter (demo mode)
-python tools/encrypted_dns_hunter.py --demo
+python tools/encrypted_dns_hunter_v2.py --demo
 
 # Run exfil simulator (dry-run, no queries sent)
-python tools/dns_exfil_sim.py --demo
+python tools/dns_exfil_sim_v2.py --demo
 ```
 
 ### Option B: Full Lab (Docker Compose)
@@ -78,11 +78,11 @@ docker compose ps
 
 # Terminal 1: Start monitoring
 docker compose exec monitoring \
-  python dns_anomaly_detector.py --zeek /logs/zeek/dns.log
+  python dns_anomaly_detector_v2.py --zeek /logs/zeek/dns.log
 
 # Terminal 2: Run simulation
 docker compose exec attacker \
-  python dns_exfil_sim.py \
+  python dns_exfil_sim_v2.py \
     --text "Simulated sensitive data" \
     --domain lab.internal \
     --resolver 172.20.0.20 \
@@ -94,15 +94,15 @@ CRITICAL: To prevent Elasticsearch from crashing on Linux, run this command befo
 sudo sysctl -w vm.max_map_count=262144
 ---
 
-## 🛠️ Tool Reference
+## Tool Reference
 
-### 1. dns_anomaly_detector.py
+### 1. dns_anomaly_detector_v2.py
 
 ML-powered DNS exfiltration and DGA detection engine.
 
 ```
 Usage:
-  python dns_anomaly_detector.py [OPTIONS]
+  python dns_anomaly_detector_v2.py [OPTIONS]
 
 Input:
   --demo              Synthetic dataset (benign + 4 attack patterns)
@@ -152,13 +152,13 @@ Detects:
 
 ---
 
-### 2. dns_exfil_sim.py
+### 2. dns_exfil_sim_v2.py
 
 Slow-drip covert channel simulation for detection validation.
 
 ```
 Usage:
-  python dns_exfil_sim.py [OPTIONS]
+  python dns_exfil_sim_v2.py [OPTIONS]
 
 Input:
   --demo              Run all 4 modes in dry-run (interactive)
@@ -187,13 +187,13 @@ Options:
 
 ---
 
-### 3. encrypted_dns_hunter.py
+### 3. encrypted_dns_hunter_v2.py
 
 DoH / DoQ / QUIC C2 channel detector with ML.
 
 ```
 Usage:
-  python encrypted_dns_hunter.py [OPTIONS]
+  python encrypted_dns_hunter_v2.py [OPTIONS]
 
 Input:
   --demo              Synthetic connections (legitimate + C2 patterns)
@@ -246,10 +246,10 @@ Detects:
 
 ```bash
 # Step 1: Baseline — run detector before attack
-python dns_anomaly_detector.py --zeek /logs/zeek/dns.log --json before.json
+python dns_anomaly_detector_v2.py --zeek /logs/zeek/dns.log --json before.json
 
 # Step 2: Start simulation (lab resolver required for --live)
-python dns_exfil_sim.py \
+python dns_exfil_sim_v2.py \
   --text "CORP_CONFIDENTIAL:employee_db_export:payroll_2025" \
   --domain lab.internal \
   --resolver 127.0.0.1 \
@@ -257,7 +257,7 @@ python dns_exfil_sim.py \
   --delay 45 --jitter --dry-run   # Remove --dry-run for live test
 
 # Step 3: Analyze
-python dns_anomaly_detector.py --zeek /logs/zeek/dns.log --json after.json
+python dns_anomaly_detector_v2.py --zeek /logs/zeek/dns.log --json after.json
 
 # Step 4: Record MTTD
 echo "MTTD = time from first exfil query to first HIGH alert"
@@ -288,7 +288,7 @@ record = {
 print(json.dumps(record))
 " >> /tmp/conn.log
 
-python encrypted_dns_hunter.py --conn /tmp/conn.log
+python encrypted_dns_hunter_v2.py --conn /tmp/conn.log
 ```
 
 ---
